@@ -1,0 +1,11 @@
+.tag
+attribute-target-key=b
+tag-label=mac address destinations
+val=all
+end
+
+.view
+granularity=100000
+start=0
+duration=1000000
+end
