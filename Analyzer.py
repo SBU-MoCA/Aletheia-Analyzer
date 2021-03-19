@@ -104,42 +104,61 @@ tag_index_labels = ['Target Attribute', 'Tag Label', 'Tag Value (or all for all 
 view = [None] * VIEW_INDEX_MAX
 
 
+ """Function to process radiotap headers per received frame.
+
+    Args:
+        buffer: line to be parsed and processed.
+        lc: location within line (i.e. current index).
+        count: length of the line
+
+    Returns:
+        The new index of line (could be EOL if no other attributes were processed per the frame) 
+
+    """
 def process_rt(buffer, lc, count):
     i = 0
+    # iterate over existing attributes
     while i < len(attribs['RT']):
         field = attribs['RT'][i]
+        # if attribute is not parsed/does not exist in frame, skip parsing and move on to next radiotap field
         if buffer[lc] == int.from_bytes('|'.encode(), "little"):
             lc += 1
             i += 1
             continue
+
+       	# If the field is of TSFT
         if field == IEEE80211_RADIOTAP_TSFT:
             tsftar = buffer[lc: lc + 7]  # 8 bytes for TSFT
-            lc += 9
-            # int.from_bytes(size, "little")
             TSFT = int.from_bytes(tsftar, "little")
-            print('TSFT = ' + str(TSFT))
             log[count]['TSFT'] = TSFT
+             lc += 9
+        #If the field is of Flags field
         if field == IEEE80211_RADIOTAP_FLAGS:
             flags = buffer[lc]  # 1 byte for flags
             log[count]['Flags'] = flags
-            # flags = int.from_bytes(buffer[lc], "little")
             lc += 2
-            print('Flags = ' + str(flags))
         if field == IEEE80211_RADIOTAP_RATE:
             rate = buffer[lc]  # 1 byte for rate (500Kbps)
             log[count]['Rate'] = rate
             lc += 2
-            print('Rate = ' + str(rate))
         if field == IEEE80211_RADIOTAP_MCS:
             log[count]['known'] = buffer[lc]
             log[count]['flags'] = buffer[lc + 1] # NOTE: Case sensitive to differentiate between Flags and flags of 802.11n
             log[count]['mcs'] = buffer[lc + 2]
-            print('mcs values are ' + str(buffer[lc]) + ', ' + str(buffer[lc + 1]) +', and ' + str(buffer[lc + 2]))
             lc += 4
         i += 1
     return lc
 
+ """Function to process conditional attributes 
 
+    Args:
+        buffer: line to be parsed and processed.
+        lc: location within line (i.e. current index).
+        count: length of the line
+
+    Returns:
+		0 on success. The function does not return any index because CA attributes are placed at the end of every frame
+    """
 def process_ca(buffer, lc, buf_cnt, count):
     while lc < len(ca_keys):
         key = buffer[lc]
@@ -151,7 +170,17 @@ def process_ca(buffer, lc, buf_cnt, count):
             lc += end_index
     return 0
 
+ """Function to process general attributes and place them in data structures appropriately
 
+    Args:
+        buffer: line to be parsed and processed.
+        lc: location within line (i.e. current index).
+        count: length of the line
+
+    Returns:
+        The new index of line (could be EOL if no other attributes were to be processed per the frame) 
+
+    """
 def process_ga(buffer, lc, count):
     i = 0
     while i < len(ga_keys):
@@ -164,7 +193,17 @@ def process_ga(buffer, lc, count):
         i += 1
     return 0
 
+ """Function to process conditional attribute
 
+    Args:
+        buffer: line to be parsed and processed.
+        lc: location within line (i.e. current index).
+        count: length of the line
+
+    Returns:
+        The new index of line (could be EOL if no other attributes were processed per the frame) 
+
+    """
 def is_eof(f):
     cur = f.tell()  # save current position
     f.seek(0, os.SEEK_END)
@@ -172,28 +211,39 @@ def is_eof(f):
     f.seek(cur, os.SEEK_SET)
     return cur == end
 
-
+ """Function to create all possible tags based on attribute selected to visualze based on
+    """
 def generate_tags_labels():
     i = 0
+    # select attribute key based on selected target tag
     target_attr_key = tags[0][TAG_INDEX_TARGET_ATTRIBUTE]
     tag_type = ''
+    # iterate over all general attribute keys and see if tag target is a general attribute
     if target_attr_key in ga_keys:
         tag_type = 'GA'
         keys = ga_keys
         print('target attribute is a GA')
-    if target_attr_key in ca_keys:
+    # Iterate over all conditional attribute keys and see if tag is a conditional attribute
+    elif target_attr_key in ca_keys:
         print('target attribute is a CA')
         tag_type = 'CA'
         keys = ca_keys
 
+    # obtain tag attribute grouping format
     group = attribs[tag_type][target_attr_key][ATTRIBUTE_INDEX_GROUP]
+    # obtain tag attribute delimiter
     delimiter = attribs[tag_type][target_attr_key][ATTRIBUTE_INDEX_DELIMITER]
+    # obtain size of tag attribute
     size = attribs[tag_type][target_attr_key][ATTRIBUTE_INDEX_SIZE]
+    # obtain output format choice for that tag
     output_format = attribs[tag_type][target_attr_key][ATTRIBUTE_INDEX_OUTPUTFORMAT]
 
+    # iterate over all tags keys
     while i < len(tags_keys):
         str = ''
         ii = 0
+
+        # inside the tag key, we form appopriate format to be presentable to the user
         while ii < size:
             if group == 1:
                 val = tags_keys[i][ii]
@@ -206,41 +256,66 @@ def generate_tags_labels():
                 str += delimiter
             ii += 1
         i += 1
+        # add correctly formatted key to the tags labels
         tags_labels.append(str)
     return
 
+ """Function to process tags and create appropriate data structures.
 
+    Args:
+    	config: config file indicating what tags and how to tag the data for visualization
+
+    Returns:
+    	None
+
+    """
 def process_tags(config):
     newtag = True
     global tags_counter
     while True:
+    	# read line from config
         line = config.readline()
         line = line.rstrip('\n')
+        # check if end of markup is reached, that means tag definition is complete
         if 'end' in line or is_eof(config):
             tags_counter += 1
             break
+        # signal that there is label and value
         elif '=' in line:
             str_tok = line.split('=')
             label = str_tok[0]
             value = str_tok[1]
             if newtag:
+            	# processs tag
                 newtag = False
                 tags[tags_counter] = [None] * TAG_INDEX_MAX
                 tags[tags_counter][TAG_INDEX_VAL] = []
             if label == 'tag-label':
+            	# take label for the tag
                 tags[tags_counter][TAG_INDEX_LABEL] = value
             elif label == 'attribute-target-key':
+            	# Key target of attribute to be tagged
                 tags[tags_counter][TAG_INDEX_TARGET_ATTRIBUTE] = value
             elif label == 'val':
                 if 'all' in value:
+                	# take all possible tag variations of the target attribute
                     tags[tags_counter][TAG_INDEX_VAL].append(value)
                     find_possible_tags(tags_counter)
                 else:
+                	# If value is not already stored in the tags variation array, add it
                     if value not in tags_keys:
                         tags_keys.append(value)
+    # generate all labels based on variations with proper format of the attribute
     generate_tags_labels()
 
+ """Function to process the view and create the graphs
 
+    Args:
+    	config: configuration file that contains markup language which contains visuals information of graphs
+
+    Returns:
+
+    """
 def process_view(config):
     while True:
         line = config.readline()
@@ -253,16 +328,22 @@ def process_view(config):
             str_tok = line.split('=')
             label = str_tok[0]
             value = str_tok[1]
+            # check x tick granularity
             if label == 'granularity':
                 view[VIEW_INDEX_GRANULARITY] = value
                 pass
+            # check start point (i.e. if beginning of file or after some xx msecs)
             elif label == 'start':
                 view[VIEW_INDEX_START] = value
                 pass
+            # check duration of graph
             elif label == 'duration':
                 view[VIEW_INDEX_DURATION] = value
 
-
+ """Function to parse configuration file which contains tag and view sections
+    Args:
+    Returns:
+   """
 def parse_config():
     config = open('config.txt', 'r')
     while True:
@@ -270,12 +351,22 @@ def parse_config():
         line = line.rstrip('\n')
         if is_eof(config):
             break
+        # if tag section begins
         if '.tag' in line:
             process_tags(config)
+        # if view section begins
         elif '.view' in line:
             process_view(config)
 
+ """Function to process attribute and create structure to parse binary file
 
+    Args:
+		ADF: attribute definition file (defined by user)
+		attr_type: type of attribute (CA/GA/RT)
+
+    Returns:
+      
+    """
 def process_attribute(ADF, attr_type):
     line = ADF.readline()
     key = ''
@@ -285,6 +376,7 @@ def process_attribute(ADF, attr_type):
     group = 0
     attr_label = ''
     rt_val = 0
+    # Go over attribute parameters and start parsing tokenized strings
     while '=' in line:
         line = line.rstrip('\n')
         str_tok = line.split('=')
@@ -324,27 +416,43 @@ def process_attribute(ADF, attr_type):
         attribs[attr_type][key].append(delimiter)
 
 
-# parse ADF
+ """Function to Parse Attribute Definition File (ADF) defined by the user
+
+    Args:
+    Returns:
+
+    """
 def parse_ADF():
     ADF = open('ADF.txt', 'r')
     while True:
+    	# read line by line from ADF
         line = ADF.readline()
         line = line.rstrip('\n')
         if is_eof(ADF):
             break
+        # if ADF does not have '=', skip the line (malformed line)
         if '=' not in line:
             continue
         str_tok = line.split('=')
         label = str_tok[0]
         value = str_tok[1]
         if label == 'attribute-type':
+        	# beginning of attribute
             attr_type = value
             process_attribute(ADF, attr_type)
     ADF.close()
     print("ADF PARSING COMPLETE")
-    print(attribs)
+    print(attribs) # display all attributes
 
 
+ """Function to process conditional attribute
+
+    Args:
+    	val: value to display
+    	output_format: format of display function (int/hex/etc)
+    Returns:
+   
+    """
 # to Parse output binary, we read all RT available first, GA, then CA at end.
 # the code uses two buffer mechanisms similar to edge code, one big buffer to store large chunks and another that
 # stores per frame to be consumed, etc.
@@ -354,6 +462,10 @@ def display(val, output_format):
     elif output_format == 'int':
         print(val, end='')
 
+
+ """Function to obtain value (same as display)
+ 	TODO: merge obtain_val and display
+    """
 def obtain_val(val, output_format):
     ret = ''
     if output_format == 'hex':
@@ -362,6 +474,14 @@ def obtain_val(val, output_format):
         ret = val
     return ret
 
+
+ """Function to display (on console) all general attributes
+
+    Args:
+        label: line to be parsed and processed.
+        key: location within line (i.e. current index).
+        count: length of the line
+    """
 def view_ga(label, key, count):
     i = 0
     group = attribs['GA'][ga_keys[i]][ATTRIBUTE_INDEX_GROUP]
@@ -383,7 +503,8 @@ def view_ga(label, key, count):
         label = attribs['GA'][ga_keys[i]][ATTRIBUTE_INDEX_LABEL]
     print()
 
-
+ """Function to parse output binary logged from medium
+    """
 def parse_output():
     output = open('output.bin', 'rb')
     buffer = bytes()
@@ -392,6 +513,7 @@ def parse_output():
     while not is_eof(output):
         buffer += output.read(20)
         buf_cnt = 0
+        # iterate over the frame and find out when it reaches end of a processed frame, if not, keep adding to the buffer
         while buf_cnt < len(buffer) - 1:
             if buffer[buf_cnt] == int.from_bytes('\t'.encode(), "little") and buffer[buf_cnt + 1] == int.from_bytes(
                     '\n'.encode(), "little"):
@@ -409,19 +531,22 @@ def parse_output():
         # new entry for frame
         log.append({})  # add new entry for frame
         log[count]['Size'] = size
-
         lc = process_rt(buffer, lc, count)
+
         if buffer[lc] == int.from_bytes('|'.encode(), "little"):
             lc += 1
+        # process all general attributes in the frame
         lc = process_ga(buffer, lc, count)
+        # process all conditional attributes in the frame that may exist
         process_ca(buffer, lc, buf_cnt, count)
 
         buffer = buffer[buf_cnt + 1:]
         print()
         count += 1
-        # process all GA
 
 
+ """Function to calculate duration of each frame (802.11 abgn supported)
+    """
 # calculates duration per frame. If a frame does not have rate value nor MCS for 802.11n rates we assume
 # 1Mbps which is conservative. However, that does not occur many times so it is a reasonable assumption to represent medium
 def calculate_durations():
@@ -496,11 +621,22 @@ def calculate_durations():
         # print(duration)
         log[i]['duration'] = duration
         i += 1
-    print('total of 11n frames wtih mcs = ' + str(count11n))
 
+
+ """Function to find the tag's label based on its index
+
+    Args:
+		tag_index: index of the tag 
+
+    Returns:
+        The label value of the tag
+
+    """
 def find_tag_label(tag_index):
     target_attr_key = tags[tag_index][TAG_INDEX_TARGET_ATTRIBUTE]
     tag_type = ''
+
+    # find out type of the tag (GA/CA)
     if target_attr_key in ga_keys:
         tag_type = 'GA'
         print('target attribute is a GA')
@@ -511,18 +647,29 @@ def find_tag_label(tag_index):
     if tag_type == '':
         print('cannot find tag type, please revise your tag section')
         exit(0)
-
+    # obtain label of the tag
     label = attribs[tag_type][target_attr_key][ATTRIBUTE_INDEX_LABEL]
     return label
 
+
+ """Function to find all possible tags
+
+    Args:
+		tag_index: index of the tag to find all variations
+    """
 def find_possible_tags(tag_index):
     i = 0
     label = find_tag_label(tag_index)
+    # iterate over all available values within logged data for the label, and append new entries if not there
     while i < len(log):
         if log[i][label] not in tags_keys:
             tags_keys.append(log[i][label])
         i+= 1
 
+
+ """Function to start tag and view portion of Analyzer
+
+    """
 def tag_view():
     fig, axl = plt.subplots()
     ytiks =  [0, 25, 50, 75, 100]
@@ -552,6 +699,8 @@ def tag_view():
     i = 0 # iterator for frames TSFT
     util = [0] * (len(lines))
     pts = 0 # iterator for bars i.e. number of bars to log utilization at.
+
+    # start creating bars based on defined parameters per user
     while vbeg < vend and log[i]['TSFT'] < vend:
         # If frame utilization (or some part of it) fall within granularity bar
         #print('vbeg = ' + str(vbeg) + 'and i = ' + str(i) + ' with TSFT ' + str(log[i]['TSFT']))
@@ -577,10 +726,6 @@ def tag_view():
             else:
                 index = tags_keys.index(log[i][label])
                 util[index] += frame_dur
-#                if index == 6:
-#                   print('Size = ' + str(log[i]['Size'])+ 'frame duration is ' + str(log[i]['duration']) + ' and its TSFT is ' + str(log[i]['TSFT']) + ' and beg ' + str(vbeg) +  ' ending ' + str(vbeg+granularity))
-#                   print('util value = ' + str(util[index]))
-
             #special cases #1, means we need to also increment all bars and move to next one
             if vbeg + granularity < log[i]['duration'] + log[i]['TSFT']:
                 #FIXME: Repeated code, should be placed in function better
@@ -616,8 +761,6 @@ def tag_view():
             else:
                 jj = 0
                 while jj < len(util):
-#                    if jj == 6:
-#                        print('util value is ' + str(util[jj]) + 'granularity = ' + str(granularity))
                     lines[jj][pts] = util[jj] / granularity
                     if lines[jj][pts] > 1:
                             print('WTF [' + str(jj)+ '][' + str(pts) +'] = ' + str(lines[jj][pts]))
@@ -648,16 +791,15 @@ def tag_view():
     plt.ylabel('Medium Utilization (%)', fontsize = 18)
     plt.legend(fontsize = 15)
     plt.tight_layout()
-
     plt.show()
 
 
 
 
-
+ """Function to view config after being parsed
+    """
 def view_config():
     i = 0
-    print('here ' + str(tags_counter))
     while i < tags_counter:
         j = 0
         print('Tag no.' + str(i))
@@ -669,6 +811,9 @@ def view_config():
         i += 1
 
 
+ """main function
+
+    """
 def main():
     parse_ADF()
     parse_output()
